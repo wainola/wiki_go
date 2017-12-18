@@ -1,12 +1,19 @@
 package main
 
 import (
-	"log"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"html/template"
+	"regexp"
+	"errors"
 )
+// variable global que parsea los templates que hasta el momento tenemos.
+// si recibe valores nulos (aka: el template no existe) entonces le hace exit al programa.
+var templates = template.Must(template.ParseFiles("edit.html", "view.html"))
+
+// variable global para validar
+var validPath = regexp.MustCompile("^/(edit|save|view)/([a-zA-Z0-9]+)$")
 
 type Page struct {
 	Title string
@@ -34,9 +41,10 @@ func loadPage(title string) (*Page, error) {
 	return &Page{Title: title, Body: body}, nil // retornamos un puntero a una pagina en literal y nil porque en este linea no deberia haber error
 }
 
-func viewHandler(w http.ResponseWriter, r *http.Request){
-	title := r.URL.Path[len("/view/"):]
-	log.Println(title)
+func viewHandler(w http.ResponseWriter, r *http.Request, title string){
+	if err != nil {
+		return
+	}
 	p, err := loadPage(title) // como aca se retorna un &Page, esto le pasamos despues a fmt
 	// si el error no es nulo, entonces que redireccione para poder crear el contenido
 	if err != nil {
@@ -46,8 +54,11 @@ func viewHandler(w http.ResponseWriter, r *http.Request){
 }
 
 // editHandler usa la plantilla html que hemos creado
-func editHandler(w http.ResponseWriter, r *http.Request){
-	title := r.URL.Path[len("/edit/"):] // obtenemos todo lo que esta despues de /edit/, ej: /edit/hola, return hola
+func editHandler(w http.ResponseWriter, r *http.Request, title string){
+	//title := r.URL.Path[len("/edit/"):] // obtenemos todo lo que esta despues de /edit/, ej: /edit/hola, return hola
+	if err != nil{
+		return
+	}
 	p, err := loadPage(title)
 	if err != nil {
 		p = &Page{Title: title}
@@ -56,22 +67,47 @@ func editHandler(w http.ResponseWriter, r *http.Request){
 
 }
 
-func saveHandler(w http.ResponseWriter, r *http.Request){
-	title := r.URL.Path[len("/save/"):] // lo mismo obtenemos lo que viene despues de save/...
+func saveHandler(w http.ResponseWriter, r *http.Request, title string){
+	//title := r.URL.Path[len("/save/"):] // lo mismo obtenemos lo que viene despues de save/...
+	if err != nil {
+		return
+	}
 	body := r.FormValue("body")
 	p := &Page{Title: title, Body: []byte(body)}
-	p.save()
+	error := p.save()
+	if error != nil {
+		http.Error(w, error.Error(), http.StatusInternalServerError)
+		return
+	}
 	http.Redirect(w, r, "/view/"+title, http.StatusFound)
 }
 
 // generando funcion generica para la pega del renderizado y ejecuccion de las plantillas
 func renderTemplate (w http.ResponseWriter, tmpl string, p *Page){
-	// Lee los contenidos de edit.html y retorna un *template.Template. 
-	t, _ := template.ParseFiles(tmpl)
 	// Este metodo ejecuta el template, escribiendo el html generado al http.ResponseWriter
-	t.Execute(w,p)
+	// aca en el error ejecutamos el template
+	// obtenemos la variable global y ejecutamos segun corresponda en el template
+	err := templates.ExecuteTemplate(w, tmpl+".html", p)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
+// usando function literals en go
+func makeHandler(fn func (http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// aca extraemos el titulo de la pagina desde el request
+		// y llamamos al handler fn
+		m := validPath.FindStringSubmatch(r.URL.Path)
+		if m == nil {
+			http.NotFound(w, r)
+			return
+		}
+		//return m[2], nil // titulo ingresado en este caso es la segunda subexpresion
+		fn(w, r, m[2])
+		}
+}
 
 func main(){
 	p1 := &Page{Title: "TestPage", Body: []byte("This is a sample page.")}
@@ -79,8 +115,8 @@ func main(){
 	p2, _ := loadPage("TestPage")
 	fmt.Println(string(p2.Body))
 
-	http.HandleFunc("/view/", viewHandler)
-	http.HandleFunc("/edit/", editHandler)
-	http.HandleFunc("/save/", saveHandler)
+	http.HandleFunc("/view/", makeHandler(viewHandler))
+	http.HandleFunc("/edit/", makeHandler(editHandler))
+	http.HandleFunc("/save/", makeHandler(saveHandler))
 	http.ListenAndServe(":8080", nil)
 }
